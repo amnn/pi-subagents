@@ -59,6 +59,7 @@ import { Type } from "typebox";
 
 import { Text } from "@mariozechner/pi-tui";
 import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { Summarize } from "./summarize.ts";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
@@ -124,7 +125,7 @@ export default function (pi: ExtensionAPI) {
 
     parameters: ToolParams,
 
-    renderResult: (result: AgentToolResult<Update>, _opts) => {
+    renderResult: (result: AgentToolResult<Update>, _opts, theme) => {
       const update = result.details;
 
       if (update.type === "result") {
@@ -136,15 +137,11 @@ export default function (pi: ExtensionAPI) {
 
         return new Text(`${update.agent} (${update.turns}): ${status}`, 0, 0);
       } else {
-        const text = result.content
-          .filter((c) => c.type === "text")
-          .map((c) => c.text)
-          .join("\n");
-
-        return new Text(
-          text || `${update.agent} (${update.turns}): running…`,
-          0,
-          0,
+        const text = update.update.trim() || "running…";
+        return new Summarize(
+          text,
+          `${update.agent} (${update.turns}):`,
+          { color: (s) => theme.fg("toolOutput", s) },
         );
       }
     },
@@ -320,13 +317,8 @@ async function runSubagent(
 
     return message.content
       .filter((c) => c.type === "text" || c.type === "thinking")
-      .map((c) => c.type === "thinking" ? c.thinking : c.text)
+      .map((c) => (c.type === "thinking" ? c.thinking : c.text))
       .join("\n");
-  };
-
-  const snippet = (message: string): string => {
-    const flat = message.trim().replace(/\s+/g, " ");
-    return flat.length > 80 ? `${flat.slice(0, 239)}…` : flat;
   };
 
   let stdoutBuffer = "";
@@ -350,10 +342,10 @@ async function runSubagent(
       event.type === "message_update" ||
       event.type === "message_end"
     ) {
-      const output = extract(event.message);
-      if (output.trim()) {
+      const output = extract(event.message).trim();
+      if (output) {
         result.output = output;
-        update({ update: snippet(result.output) });
+        update({ update: output });
       }
     } else if (
       event.type === "tool_execution_start" ||
@@ -364,19 +356,19 @@ async function runSubagent(
     }
   };
 
-  proc.stdout.on("data", (chunk) => {
+  proc.stdout.on("data", (chunk: any) => {
     stdoutBuffer += chunk.toString();
     const lines = stdoutBuffer.split("\n");
     stdoutBuffer = lines.pop() || "";
     for (const line of lines) processLine(line);
   });
 
-  proc.stderr.on("data", (chunk) => {
+  proc.stderr.on("data", (chunk: any) => {
     result.stderr += chunk.toString();
   });
 
   return await new Promise<Extract<Update, { type: "result" }>>((resolve) => {
-    proc.once("error", (error) => {
+    proc.once("error", (error: any) => {
       result.turns = progress.turns;
       result.exit = 1;
       result.stderr += `${result.stderr ? "\n" : ""}${error instanceof Error ? error.message : String(error)}`;
@@ -384,7 +376,7 @@ async function runSubagent(
       resolve(result);
     });
 
-    proc.once("close", (code) => {
+    proc.once("close", (code: number) => {
       if (stdoutBuffer.trim()) processLine(stdoutBuffer);
       result.turns = progress.turns;
       result.exit = code ?? 0;
