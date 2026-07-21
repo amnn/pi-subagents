@@ -142,11 +142,9 @@ export default function (pi: ExtensionAPI) {
         return new Text(`${update.agent} (${update.turns}): ${status}`, 0, 0);
       } else {
         const text = update.update.trim() || "running…";
-        return new Summarize(
-          text,
-          `${update.agent} (${update.turns}):`,
-          { color: (s) => theme.fg("toolOutput", s) },
-        );
+        return new Summarize(text, `${update.agent} (${update.turns}):`, {
+          color: (s) => theme.fg("toolOutput", s),
+        });
       }
     },
 
@@ -402,7 +400,6 @@ async function subagent(
     "",
     "- You are an isolated subagent, responsible for completing a single task delegated to you.",
     "- When you are done, produce a concise final report for your caller.",
-    `- Do not call the '${agent.name}' subagent to perform this same delegated task. You are already that subagent; complete the task yourself.`,
     `- Your instructions are available below, after the horizontal line break, loaded from '${agent.file}'.`,
     "- Load any relative files from the instructions as if they were relative to the agent file location.",
     "",
