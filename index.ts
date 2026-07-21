@@ -42,6 +42,8 @@
  *     ---
  *     name: reviewer
  *     description: Review the current work
+ *     model: gpt-5.6-sol
+ *     thinking: high
  *     ---
  *
  *     Review the current work and report findings.
@@ -75,6 +77,8 @@ interface Agent {
   description: string;
   prompt: string;
   file: string;
+  model?: string;
+  thinking?: string;
 }
 
 type Update =
@@ -417,6 +421,8 @@ async function subagent(
     "-p",
     "--no-session",
     "--no-extensions",
+    ...(agent.model ? ["--model", agent.model] : []),
+    ...(agent.thinking ? ["--thinking", agent.thinking] : []),
     "--append-system-prompt",
     prompt.path,
     taskPrompt,
@@ -485,6 +491,8 @@ async function* agents(dir: string, scope: "u" | "p"): AsyncGenerator<Agent> {
       description: `[${scope}] ${desc}`,
       prompt: parsed.body,
       file,
+      model: parsed.frontmatter.model,
+      thinking: parsed.frontmatter.thinking,
     };
   }
 }
