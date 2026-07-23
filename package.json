@@ -1,0 +1,41 @@
+{
+  "name": "pi-subagents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Isolated single-task subagents for Pi",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/fix-brace-expansion.mjs",
+    "test": "node --test test/discovery.test.ts test/output.test.ts test/subagent.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "format": "prettier --write . --ignore-unknown",
+    "format:check": "prettier --check . --ignore-unknown",
+    "audit": "npm audit",
+    "check": "npm run format:check && npm run typecheck && npm test && npm run audit",
+    "smoke": "pi --offline --no-extensions -e . --list-models __subagent_package_smoke__"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.82.1",
+    "@earendil-works/pi-coding-agent": "0.82.1",
+    "@earendil-works/pi-tui": "0.82.1",
+    "@types/node": "22.19.19",
+    "brace-expansion": "5.0.8",
+    "prettier": "3.3.3",
+    "typebox": "1.1.38",
+    "typescript": "5.9.3"
+  }
+}

@@ -5,8 +5,8 @@ import {
   wrapTextWithAnsi,
   type Component,
   type DefaultTextStyle,
-} from "@mariozechner/pi-tui";
-import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-tui";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 
 const MARKDOWN_RENDER_WIDTH = 100_000;
 const SUMMARY_MAX_VISIBLE_CHARS = 240;

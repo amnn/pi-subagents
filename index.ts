@@ -1,108 +1,103 @@
-/** Subagents
+/**
+ * Subagents extension entrypoint.
  *
- * A lightweight Pi extension for running markdown-defined subagents as
- * isolated tasks.
+ * This extension lets the parent Pi delegate one self-contained task to a
+ * markdown-defined agent running in an isolated child Pi process. It registers
+ * the `subagent` tool with this public shape:
  *
- * The extension discovers agent definitions from the following sub-directories
- * of the current directory or an ancestor:
+ *     { agent: string, label?: string, task?: string }
  *
- * - `.pi/agents/*.md`
- * - `.agents/agents/*.md`
+ * Each tool invocation owns exactly one task, child process, progress stream,
+ * terminal result, renderer row, and optional overflow artifact. Independent
+ * work is expressed as sibling `subagent` calls in one assistant message; Pi,
+ * rather than this extension, schedules those calls concurrently and returns
+ * their results in source order. The optional label distinguishes sibling calls
+ * in the UI and result details but is not added to the child's prompt.
  *
- * Otherwise the following directories are searched for fallbacks:
+ * Agent definitions are discovered when a session starts. User definitions are
+ * loaded from the standard user agent directories. Definitions in ancestor
+ * `.agents/agents` and `${CONFIG_DIR_NAME}/agents` directories are loaded only
+ * for trusted projects. Later, nearer project definitions override earlier user
+ * definitions with the same name. Every discovered agent is advertised in the
+ * parent system prompt and registered as `/agent:<name>`.
  *
- * - `~/.pi/agent/agents/*.md`
- * - `~/.agent/agents/*.md`
- *
- * Project definitions override user definitions with the same command name.
- * Definitions in child directories take precedence over definitions in
- * ancestors.
- *
- * The extension registers a tool for the agent to call subagents from the main
- * agent. It also updates the system prompt to advertise the available
- * subagents to the main agent and registers a slash command for each
- * discovered agent:
- *
- *     /agent:<name> [task]
- *
- * Running an agent involves creating a child `pi` process without a session
- * and with an augmented system prompt that includes subagent instructions.
- * This subagent is given an isolated task to act on and produce a final
- * summary, which is then handed back to the main agent.
- *
- * Progress updates are shown in the main agent's UI periodically as the
- * subagent runs.
- *
- * Subagents do not have access to custom extensions, to prevent recursion
- * (subagents have a tendency to delegate their entire task if given the
- * opportunity).
- *
- * Agent files are markdown with optional YAML-like frontmatter:
+ * Agent files are Markdown with optional frontmatter:
  *
  *     ---
  *     name: reviewer
  *     description: Review the current work
- *     model: gpt-5.6-sol
- *     thinking: high
+ *     model: provider/model-id
+ *     thinking: low
  *     ---
  *
- *     Review the current work and report findings.
+ *     Review the delegated scope and return a concise report.
  *
- * The format is generic so other harnesses can consume the same definitions.
+ * A call starts `pi` in JSON print mode without a session or custom extensions,
+ * preventing recursive delegation while preserving normal built-in tools and
+ * filesystem effects. The agent body is appended to the child system prompt;
+ * `task` is sent as the child user prompt. Model and thinking overrides come
+ * only from agent frontmatter.
+ *
+ * Child thinking, narration, and tool activity are available as progress. A
+ * successful final result contains only text selected from the terminal
+ * `agent_end` response. Process, protocol, model, and cancellation failures are
+ * normalized into `completed`, `failed`, or `aborted`. Model-visible reports are
+ * capped at 50 KiB, with larger reports preserved in a private artifact.
+ *
+ * Supporting modules:
+ *
+ * - `types.ts` defines shared agent, task, progress, and result contracts.
+ * - `discovery.ts` owns trusted filesystem discovery and precedence.
+ * - `subagent.ts` owns child setup, protocol collection, cancellation, cleanup,
+ *   and terminal classification.
+ * - `output.ts` owns titles, diagnostics, report formatting, truncation, and
+ *   artifacts.
+ * - `summarize.ts` renders compact Markdown progress and collapsed content.
  */
-
-import { ChildProcessByStdio, spawn } from "node:child_process";
-import { Dirent, promises as fs } from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { Readable } from "node:stream";
 
 import { Type } from "typebox";
 
-import { Text } from "@mariozechner/pi-tui";
-import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+  CONFIG_DIR_NAME,
+  getAgentDir,
+  getMarkdownTheme,
+  parseFrontmatter,
+} from "@earendil-works/pi-coding-agent";
+import { discoverAgents } from "./discovery.ts";
+import {
+  formatDiagnostics,
+  prepareModelOutput,
+  resultSummary,
+  toolHeader,
+} from "./output.ts";
+import { runSubagent } from "./subagent.ts";
 import { Summarize } from "./summarize.ts";
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { SubagentDisplayStatus } from "./output.ts";
 import type {
-  AgentEvent,
-  AgentToolResult,
-  AgentToolUpdateCallback,
-  AgentMessage,
-} from "@mariozechner/pi-agent-core";
+  Agent,
+  SubagentResult,
+  SubagentTask,
+  SubagentUpdate,
+} from "./types.ts";
 
-interface Agent {
-  name: string;
-  description: string;
-  prompt: string;
-  file: string;
-  model?: string;
-  thinking?: string;
+/** Agents discovered on session start. */
+const discovery = new Map<string, Agent>();
+
+interface SubagentRenderState {
+  metadata?: {
+    turns: number;
+    status: SubagentDisplayStatus;
+  };
 }
 
-type Update =
-  | {
-      type: "partial";
-      agent: string;
-      turns: number;
-      update: string;
-    }
-  | {
-      type: "result";
-      agent: string;
-      task: string | undefined;
-      turns: number;
-      output: string;
-      stderr: string;
-      exit: number;
-      aborted: boolean;
-    };
-
-/** Agents discovered on session start */
-const discovery: Map<string, Agent> = new Map();
-
 const ToolParams = Type.Object({
+  label: Type.Optional(
+    Type.String({ description: "Human-readable identity for this task" }),
+  ),
   agent: Type.String({ description: "The name of the agent to run" }),
   task: Type.Optional(Type.String({ description: "Task to delegate" })),
 });
@@ -113,39 +108,71 @@ export default function (pi: ExtensionAPI) {
     label: "Subagent",
 
     description: [
-      "Run an agent turn in the current context with additional instructions. Its tree is",
-      "summarized and wiped on turn end, but filesystem changes persist.",
+      "Run one isolated agent task in the current context.",
+      "Pi can run sibling subagent tool calls concurrently.",
+      "The child tree is summarized and wiped on turn end, but filesystem changes persist.",
+      "Model-visible output is capped at 50 KiB; truncated reports are saved to a private artifact.",
     ].join(" "),
 
     promptSnippet:
-      "Run an agent in the current context with custom additional instructions for a single turn.",
+      "Run one isolated agent task; emit sibling calls for independent parallel tasks.",
 
     promptGuidelines: [
-      "Use a subagent for self-contained tasks that fit its description, and do not require back-and-forth with the user.",
-      "Call a subagent with its name, and optionally a task.",
-      "Use the exact subagent name from the Available subagents list.",
-      "When calling a subagent, include all context it needs; subagents run in isolated sessions and do not automatically inherit the main conversation.",
+      "Use subagent for self-contained tasks that fit an available subagent's description and do not require back-and-forth with the user.",
+      "Each subagent call runs exactly one task. Emit multiple sibling subagent calls in the same turn for independent parallel work.",
+      "Use exact subagent names from the Available subagents list.",
+      "Include all necessary context in each subagent task; subagents run in isolated sessions and do not automatically inherit the main conversation.",
+      "Give concurrent subagent calls concise labels, especially when invoking the same agent more than once.",
+      "Avoid concurrent subagent calls that may make conflicting filesystem changes.",
     ],
 
     parameters: ToolParams,
 
-    renderResult: (result: AgentToolResult<Update>, _opts, theme) => {
+    renderCall: (args, theme, context) => {
+      const task: SubagentTask = args;
+      const title =
+        (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      const state = context.state as SubagentRenderState;
+      const metadata = state.metadata ?? {
+        turns: 0,
+        status: context.executionStarted ? "running" : "queued",
+      };
+      const header = toolHeader(task, metadata.turns, metadata.status);
+      title.setText(
+        theme.fg("toolTitle", theme.bold("subagent ")) +
+          theme.fg("muted", header),
+      );
+      return title;
+    },
+
+    renderResult: (
+      result: AgentToolResult<SubagentUpdate>,
+      { expanded },
+      theme,
+      context,
+    ) => {
       const update = result.details;
+      updateRenderMetadata(
+        context.state as SubagentRenderState,
+        context.invalidate,
+        update.turns,
+        update.type === "partial" ? "running" : update.status,
+      );
 
-      if (update.type === "result") {
-        const status = update.aborted
-          ? "aborted"
-          : update.exit === 0
-            ? "completed"
-            : "failed";
-
-        return new Text(`${update.agent} (${update.turns}): ${status}`, 0, 0);
-      } else {
+      if (update.type === "partial") {
         const text = update.update.trim() || "running…";
-        return new Summarize(text, `${update.agent} (${update.turns}):`, {
-          color: (s) => theme.fg("toolOutput", s),
+        return new Summarize(text, "", {
+          color: (value) => theme.fg("toolOutput", value),
         });
       }
+
+      if (!expanded) {
+        return new Summarize(resultSummary(update), "", {
+          color: (value) => theme.fg("toolOutput", value),
+        });
+      }
+
+      return renderExpandedResult(update, theme);
     },
 
     execute: async (
@@ -154,385 +181,178 @@ export default function (pi: ExtensionAPI) {
       signal,
       onUpdate,
       ctx,
-    ): Promise<AgentToolResult<Update>> => {
-      const agent = discovery.get(params.agent);
-      if (agent) {
-        const details = await runSubagent(
-          ctx.cwd,
-          agent,
-          params.task,
-          signal,
-          onUpdate,
-        );
-        const text = details.output || details.stderr || "(no output)";
+    ): Promise<AgentToolResult<SubagentUpdate>> => {
+      const task: SubagentTask = {
+        agent: params.agent,
+        ...(params.label?.trim() ? { label: params.label.trim() } : {}),
+        ...(params.task !== undefined ? { task: params.task } : {}),
+      };
+      const agent = discovery.get(task.agent);
 
-        return {
-          content: [{ type: "text", text }],
-          details,
+      let result: SubagentResult;
+      if (signal?.aborted) {
+        result = {
+          ...task,
+          type: "result",
+          status: "aborted",
+          turns: 0,
+          output: "",
+          stderr:
+            signal.reason instanceof Error
+              ? signal.reason.message
+              : String(signal.reason),
+          diagnostics: ["Parent aborted before the child process started"],
+        };
+      } else if (!agent) {
+        const available = Array.from(discovery.keys()).join(", ") || "none";
+        const message = `Unknown subagent ${JSON.stringify(
+          task.agent,
+        )}. Available subagents: ${available}.`;
+        result = {
+          ...task,
+          type: "result",
+          status: "failed",
+          turns: 0,
+          output: "",
+          stderr: message,
+          diagnostics: [message],
         };
       } else {
-        const agents = Array.from(discovery.keys()).join(", ") || "none";
-        const text = `Unknown subagent '${params.agent}'. Available subagents: ${agents}.`;
-
-        return {
-          content: [{ type: "text", text }],
-          details: {
+        try {
+          result = await runSubagent(
+            ctx.cwd,
+            agent,
+            task,
+            signal,
+            (progress) => {
+              onUpdate?.({
+                content: [
+                  {
+                    type: "text",
+                    text: progress.update,
+                  },
+                ],
+                details: progress,
+              });
+            },
+          );
+        } catch (error) {
+          const aborted = signal?.aborted === true;
+          const message =
+            error instanceof Error ? error.message : String(error);
+          result = {
+            ...task,
             type: "result",
-            agent: params.agent,
-            task: params.task,
+            status: aborted ? "aborted" : "failed",
             turns: 0,
             output: "",
-            stderr: text,
-            exit: 1,
-            aborted: false,
-          },
-        };
+            stderr: message,
+            diagnostics: [
+              aborted
+                ? "Parent aborted before the child process started"
+                : `Unable to start subagent: ${message}`,
+            ],
+          };
+        }
       }
+
+      const prepared = await prepareModelOutput(result);
+      return {
+        content: [{ type: "text", text: prepared.text }],
+        details: prepared.result,
+      };
     },
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    const agents = await discoverAgents(ctx.cwd, ctx.isProjectTrusted(), {
+      agentDir: getAgentDir(),
+      configDirName: CONFIG_DIR_NAME,
+      parseFrontmatter: (content) =>
+        parseFrontmatter<Record<string, string>>(content),
+    });
+
     discovery.clear();
-    for await (const agent of discover(ctx.cwd)) {
-      discovery.set(agent.name, agent);
-    }
+    for (const [name, agent] of agents) discovery.set(name, agent);
 
     for (const agent of discovery.values()) {
       pi.registerCommand(`agent:${agent.name}`, {
         description: agent.description,
-        handler: async (args, _ctx) => {
+        handler: async (args) => {
           const task = args.trim();
           pi.sendUserMessage(
             !task
               ? `Delegate to subagent ${JSON.stringify(agent.name)}.`
-              : `Delegate task ${JSON.stringify(task)} to subagent ${JSON.stringify(agent.name)}.`,
+              : `Delegate task ${JSON.stringify(
+                  task,
+                )} to subagent ${JSON.stringify(agent.name)}.`,
           );
         },
       });
     }
   });
 
-  // Add the discovered agents to the system prompt so the main agent is aware
-  // of them and when might be useful to call them.
   pi.on("before_agent_start", async (event) => {
-    if (discovery.size === 0) {
-      return {};
-    }
+    if (discovery.size === 0) return {};
 
     const lines = [event.systemPrompt, "", "Available subagents:"];
     for (const [name, agent] of discovery) {
       lines.push(`- ${name}: ${agent.description}`);
     }
-
-    return {
-      systemPrompt: lines.join("\n"),
-    };
+    return { systemPrompt: lines.join("\n") };
   });
 }
 
-/**
- * Discover agent definitions in the filesystem.
- *
- * Looks in user-scoped (under the home directory) and project-scoped
- * directories (ancestors of the current working directory).
- *
- * Returns a mapping from command name to the agent's definition. If multiple
- * agents share the same command name, project-scoped agents take precedence
- * over user-scoped agents, and pi-specific sub-directories take precedence
- * over more general ones.
- *
- * Agents are generated in reverse precedence order: Project-scoped agents are
- * generated after user-scoped agents, and pi-specific agents are generated
- * after more general ones.
- */
-async function* discover(cwd: string): AsyncGenerator<Agent> {
-  const dirs: Array<{ dir: string; scope: "u" | "p" }> = [
-    { dir: path.join(os.homedir(), ".agents", "agents"), scope: "u" },
-    { dir: path.join(getAgentDir(), "agent", "agents"), scope: "u" },
-  ];
-
-  for (const parent of Array.from(ancestors(cwd)).reverse()) {
-    dirs.push({ dir: path.join(parent, ".agents", "agents"), scope: "p" });
-    dirs.push({ dir: path.join(parent, ".pi", "agents"), scope: "p" });
-  }
-
-  for (const { dir, scope } of dirs) {
-    for await (const agent of agents(dir, scope)) {
-      yield agent;
-    }
-  }
-}
-
-/** Runs a subagent process to completion and collects its final assistant output. */
-async function runSubagent(
-  cwd: string,
-  agent: Agent,
-  task: string | undefined,
-  signal?: AbortSignal,
-  onUpdate?: AgentToolUpdateCallback<Update>,
-): Promise<Extract<Update, { type: "result" }>> {
-  const proc = await subagent(cwd, agent, task, signal);
-
-  const result: Extract<Update, { type: "result" }> = {
-    type: "result",
-    agent: agent.name,
-    task: task,
-    turns: 0,
-    output: "",
-    stderr: "",
-    exit: -1,
-    aborted: false,
-  };
-
-  const progress: Extract<Update, { type: "partial" }> = {
-    type: "partial",
-    agent: agent.name,
-    turns: 0,
-    update: "starting…",
-  };
-
-  const update = (patch: Partial<Extract<Update, { type: "partial" }>>) => {
-    // Do not set the update field to an empty or whitespace-only string.
-    const next = { ...patch };
-    if ("update" in next && !next.update?.trim()) {
-      delete next.update;
-    }
-
-    Object.assign(progress, next);
-    const trimmed = progress.update.trim();
-    const text = !trimmed
-      ? `${progress.agent} (${progress.turns})`
-      : `${progress.agent} (${progress.turns}): ${trimmed}`;
-
-    onUpdate?.({
-      content: [{ type: "text", text }],
-      details: { ...progress },
-    });
-  };
-
-  const extract = (message: AgentMessage): string => {
-    // Progress should reflect the subagent's own narration, not tool output
-    // such as file contents, bash stdout, or command context messages.
-    if (message.role !== "assistant") {
-      return "";
-    }
-
-    return message.content
-      .filter((c) => c.type === "text" || c.type === "thinking")
-      .map((c) => (c.type === "thinking" ? c.thinking : c.text))
-      .join("\n");
-  };
-
-  let stdoutBuffer = "";
-  const processLine = (line: string) => {
-    if (!line.trim()) return;
-
-    let event: AgentEvent;
-    try {
-      event = JSON.parse(line) as AgentEvent;
-    } catch {
-      return;
-    }
-
-    if (event.type === "agent_end") {
-      update({ update: "finished" });
-    } else if (event.type === "turn_start") {
-      update({ turns: progress.turns + 1 });
-    } else if (
-      event.type === "turn_end" ||
-      event.type === "message_start" ||
-      event.type === "message_update" ||
-      event.type === "message_end"
-    ) {
-      const output = extract(event.message).trim();
-      if (output) {
-        result.output = output;
-        update({ update: output });
-      }
-    } else if (
-      event.type === "tool_execution_start" ||
-      event.type === "tool_execution_update" ||
-      event.type === "tool_execution_end"
-    ) {
-      update({ update: `using ${event.toolName}` });
-    }
-  };
-
-  proc.stdout.on("data", (chunk: any) => {
-    stdoutBuffer += chunk.toString();
-    const lines = stdoutBuffer.split("\n");
-    stdoutBuffer = lines.pop() || "";
-    for (const line of lines) processLine(line);
-  });
-
-  proc.stderr.on("data", (chunk: any) => {
-    result.stderr += chunk.toString();
-  });
-
-  return await new Promise<Extract<Update, { type: "result" }>>((resolve) => {
-    proc.once("error", (error: any) => {
-      result.turns = progress.turns;
-      result.exit = 1;
-      result.stderr += `${result.stderr ? "\n" : ""}${error instanceof Error ? error.message : String(error)}`;
-      result.aborted = signal?.aborted ?? false;
-      resolve(result);
-    });
-
-    proc.once("close", (code: number) => {
-      if (stdoutBuffer.trim()) processLine(stdoutBuffer);
-      result.turns = progress.turns;
-      result.exit = code ?? 0;
-      result.aborted = signal?.aborted ?? false;
-      resolve(result);
-    });
-  });
-}
-
-/** Creates a dedicated `pi` process for an isolated subagent run. */
-async function subagent(
-  cwd: string,
-  agent: Agent,
-  task: string | undefined,
-  signal?: AbortSignal,
-): Promise<ChildProcessByStdio<null, Readable, Readable>> {
-  const systemPrompt = [
-    `Subagent '${agent.name}':`,
-    "",
-    "- You are an isolated subagent, responsible for completing a single task delegated to you.",
-    "- When you are done, produce a concise final report for your caller.",
-    `- Your instructions are available below, after the horizontal line break, loaded from '${agent.file}'.`,
-    "- Load any relative files from the instructions as if they were relative to the agent file location.",
-    "",
-    "---",
-    "",
-    agent.prompt.trim(),
-  ].join("\n");
-
-  const taskPrompt =
-    task?.trim() || "Infer a task from your subagent instructions.";
-
-  const prompt = await temp("prompt.md", systemPrompt);
-  const args = [
-    "--mode",
-    "json",
-    "-p",
-    "--no-session",
-    "--no-extensions",
-    ...(agent.model ? ["--model", agent.model] : []),
-    ...(agent.thinking ? ["--thinking", agent.thinking] : []),
-    "--append-system-prompt",
-    prompt.path,
-    taskPrompt,
-  ];
-
-  const proc = spawn("pi", args, {
-    cwd,
-    shell: false,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  const abort = () => {
-    proc.kill("SIGTERM");
-    setTimeout(() => {
-      if (!proc.killed) proc.kill("SIGKILL");
-    }, 5000).unref?.();
-  };
-
-  let removed = false;
-  const remove = async () => {
-    if (removed) return;
-    removed = true;
-    signal?.removeEventListener("abort", abort);
-    await prompt.remove();
-  };
-
-  if (signal?.aborted) abort();
-  else signal?.addEventListener("abort", abort, { once: true });
-
-  proc.once("close", remove);
-  proc.once("error", remove);
-
-  return proc;
-}
-
-/** Iterates over agent definitions in directory, `dir`. */
-async function* agents(dir: string, scope: "u" | "p"): AsyncGenerator<Agent> {
-  let entries: Dirent[];
-
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
+function updateRenderMetadata(
+  state: SubagentRenderState,
+  invalidate: () => void,
+  turns: number,
+  status: SubagentDisplayStatus,
+): void {
+  if (state.metadata?.turns === turns && state.metadata.status === status) {
     return;
   }
-
-  for (const e of entries) {
-    if (!e.isFile() || !/^[^.].*.md$/.test(e.name)) {
-      continue;
-    }
-
-    const file = path.join(dir, e.name);
-    const content = await fs.readFile(file, "utf8");
-
-    let parsed: { frontmatter: Record<string, string>; body: string };
-    try {
-      parsed = parseFrontmatter<Record<string, string>>(content);
-    } catch {
-      parsed = { frontmatter: {}, body: content };
-    }
-
-    const name = parsed.frontmatter.name || path.basename(e.name, ".md");
-    const desc = parsed.frontmatter.description || `Run the '${name}' subagent`;
-
-    yield {
-      name,
-      description: `[${scope}] ${desc}`,
-      prompt: parsed.body,
-      file,
-      model: parsed.frontmatter.model,
-      thinking: parsed.frontmatter.thinking,
-    };
-  }
+  state.metadata = { turns, status };
+  // renderResult runs inside Pi's display update; defer to avoid re-entering it.
+  queueMicrotask(invalidate);
 }
 
-/**
- * Iterates over the ancestors of `file`, inclusive of `file`.
- *
- * Breaks if it hits the home directory (without yielding the home directory)
- * or if it hits the root directory (yielding the root directory).
- */
-function* ancestors(file: string): Generator<string> {
-  const home = os.homedir();
-
-  file = path.resolve(file);
-  while (file !== home) {
-    yield file;
-    const parent = path.dirname(file);
-    if (file === parent) {
-      break;
-    } else {
-      file = parent;
-    }
+function renderExpandedResult(result: SubagentResult, theme: Theme): Container {
+  const container = new Container();
+  if (result.output.trim()) {
+    container.addChild(
+      new Markdown(result.output.trim(), 0, 0, getMarkdownTheme()),
+    );
+  } else {
+    container.addChild(
+      new Text(theme.fg("muted", "(no assistant output)"), 0, 0),
+    );
   }
-}
 
-/**
- * Writes `content` to file `name` in a temporary directory.
- *
- * The returned object has a `path` that points to the written file, and a
- * `remove()` function that cleans up the containing directory.
- */
-async function temp(
-  name: string,
-  content: string,
-): Promise<{ path: string; remove: () => Promise<void> }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-"));
-  const file = path.join(dir, name);
-  await fs.writeFile(file, content, { encoding: "utf8", mode: 0o600 });
+  if (result.task?.trim()) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("muted", "Task"), 0, 0));
+    container.addChild(new Text(result.task.trim(), 0, 0));
+  }
 
-  return {
-    path: file,
-    remove: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
+  const diagnostics = formatDiagnostics(result);
+  if (diagnostics.length > 0) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("muted", "Diagnostics"), 0, 0));
+    container.addChild(
+      new Text(
+        diagnostics.map((diagnostic) => `- ${diagnostic}`).join("\n"),
+        0,
+        0,
+      ),
+    );
+  }
+
+  if (result.stderr.trim()) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("muted", "Stderr"), 0, 0));
+    container.addChild(new Text(result.stderr.trimEnd(), 0, 0));
+  }
+
+  return container;
 }
