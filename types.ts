@@ -133,7 +133,7 @@ export interface SubagentResult extends SubagentTask {
   stderr: string;
 
   /**
-   * Latest validated assistant stop reason observed in the JSON protocol.
+   * Latest validated terminal assistant stop reason observed in the JSON protocol.
    * `length`, `error`, and `aborted` affect terminal classification, while a
    * terminal `toolUse` indicates that the purported final response was not done.
    */

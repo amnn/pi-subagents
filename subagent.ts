@@ -65,8 +65,14 @@ const AGENT_MESSAGE_ROLES = new Set([
   "compactionSummary",
 ]);
 
-/** Allowlist of assistant stop reasons in Pi protocol events. */
-const STOP_REASONS = new Set(["stop", "length", "toolUse", "error", "aborted"]);
+/** Allowlist of terminal assistant stop reasons in Pi protocol events. */
+const TERMINAL_STOP_REASONS = new Set([
+  "stop",
+  "length",
+  "toolUse",
+  "error",
+  "aborted",
+]);
 
 /** Runtime controls for one child-process collection lifecycle. */
 interface CollectOptions {
@@ -109,7 +115,7 @@ interface ProtocolState {
   /** Latest non-empty assistant text available as fallback output. */
   latestAssistantText: string;
 
-  /** Latest validated assistant stop reason seen in the stream. */
+  /** Latest validated terminal assistant stop reason seen in the stream. */
   stopReason?: SubagentResult["stopReason"];
 
   /** Latest error message supplied directly by an assistant message. */
@@ -242,8 +248,9 @@ export function collectSubagentProcess(
    * Assistant-message contribution to protocol state.
    *
    * Progress consists of text and thinking blocks. Fallback output consists of
-   * text blocks. Stop reason and error metadata retain their latest values, and
-   * adverse stop reasons accumulate across messages.
+   * text blocks. Terminal stop-reason and error metadata retain their latest
+   * values, and adverse stop reasons accumulate across messages. A streaming
+   * `pending` reason contributes content only.
    */
   const recordAssistant = (message: AgentMessage, showProgress = true) => {
     if (message.role !== "assistant") return;
@@ -254,15 +261,20 @@ export function collectSubagentProcess(
     if (showProgress && progress) emitProgress(progress);
 
     const stopReason = message.stopReason;
-    state.stopReason = stopReason;
-    if (
-      stopReason === "length" ||
-      stopReason === "error" ||
-      stopReason === "aborted"
-    ) {
-      state.badStopReasons.add(stopReason);
+    if (stopReason !== "pending") {
+      state.stopReason = stopReason;
+      if (
+        stopReason === "length" ||
+        stopReason === "error" ||
+        stopReason === "aborted"
+      ) {
+        state.badStopReasons.add(stopReason);
+      }
     }
-    if (message.errorMessage) state.errorMessage = message.errorMessage;
+
+    if (message.errorMessage) {
+      state.errorMessage = message.errorMessage;
+    }
   };
 
   /** Append a protocol diagnostic while stream collection continues. */
@@ -293,12 +305,18 @@ export function collectSubagentProcess(
       return;
     }
 
-    if (
-      event.type === "message_start" ||
-      event.type === "message_update" ||
-      event.type === "message_end" ||
-      event.type === "turn_end"
-    ) {
+    if (event.type === "message_start" || event.type === "message_update") {
+      if (!isAgentMessage(event.message, true)) {
+        protocolError(
+          `${event.type} omitted its message on stdout line ${state.stdoutLine}`,
+        );
+        return;
+      }
+      recordAssistant(event.message);
+      return;
+    }
+
+    if (event.type === "message_end" || event.type === "turn_end") {
       if (!isAgentMessage(event.message)) {
         protocolError(
           `${event.type} omitted its message on stdout line ${state.stdoutLine}`,
@@ -561,8 +579,14 @@ function classifyResult(
   };
 }
 
-/** Runtime validator for supported Pi protocol message shapes. */
-function isAgentMessage(value: unknown): value is AgentMessage {
+/**
+ * Runtime validator for Pi protocol messages. `pending` is part of Pi's
+ * `AgentMessage` stop-reason union but is accepted only for streaming events.
+ */
+function isAgentMessage(
+  value: unknown,
+  allowPending = false,
+): value is AgentMessage {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -579,8 +603,14 @@ function isAgentMessage(value: unknown): value is AgentMessage {
     !("content" in value) ||
     !Array.isArray(value.content) ||
     !("stopReason" in value) ||
-    typeof value.stopReason !== "string" ||
-    !STOP_REASONS.has(value.stopReason)
+    typeof value.stopReason !== "string"
+  ) {
+    return false;
+  }
+
+  if (
+    !TERMINAL_STOP_REASONS.has(value.stopReason) &&
+    !(allowPending && value.stopReason === "pending")
   ) {
     return false;
   }
@@ -593,11 +623,13 @@ function isAgentMessage(value: unknown): value is AgentMessage {
     ) {
       return false;
     }
+
     if (content.type === "text")
       return "text" in content && typeof content.text === "string";
     if (content.type === "thinking") {
       return "thinking" in content && typeof content.thinking === "string";
     }
+
     return content.type === "toolCall";
   });
 }

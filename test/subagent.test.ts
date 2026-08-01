@@ -57,7 +57,13 @@ function child(
 
 function assistant(
   content: unknown[],
-  stopReason: "stop" | "length" | "toolUse" | "error" | "aborted" = "stop",
+  stopReason:
+    | "pending"
+    | "stop"
+    | "length"
+    | "toolUse"
+    | "error"
+    | "aborted" = "stop",
   errorMessage?: string,
 ): Record<string, unknown> {
   return { role: "assistant", content, stopReason, errorMessage };
@@ -123,6 +129,51 @@ test("successful result uses only final assistant text", async () => {
   assert.doesNotMatch(result.output, /private|intermediate/);
   assert(progress.some((update) => update.includes("private reasoning")));
   assert(progress.includes("using read"));
+});
+
+test("pending stop reasons are accepted while messages stream", async () => {
+  const proc = new FakeProcess();
+  const progress: string[] = [];
+  const pending = collectSubagentProcess(child(proc), task, {
+    onProgress: (update) => progress.push(update.update),
+  });
+
+  proc.send({
+    type: "message_start",
+    message: assistant([], "pending"),
+  });
+  proc.send({
+    type: "message_update",
+    message: assistant([{ type: "text", text: "draft" }], "pending"),
+  });
+  finalEvents(proc, assistant([{ type: "text", text: "report" }]));
+  proc.close(0);
+
+  const result = await pending;
+  assert.equal(result.status, "completed");
+  assert.equal(result.output, "report");
+  assert.equal(result.stopReason, "stop");
+  assert.deepEqual(result.diagnostics, []);
+  assert(progress.includes("draft"));
+});
+
+test("pending stop reasons remain invalid on terminal messages", async () => {
+  const proc = new FakeProcess();
+  const pending = collectSubagentProcess(child(proc), task);
+
+  proc.send({
+    type: "message_end",
+    message: assistant([{ type: "text", text: "unfinished" }], "pending"),
+  });
+  proc.send({
+    type: "agent_end",
+    messages: [assistant([{ type: "text", text: "unfinished" }], "pending")],
+  });
+  proc.close(0);
+
+  const result = await pending;
+  assert.equal(result.status, "failed");
+  assert(result.diagnostics.some((line) => line.includes("invalid message")));
 });
 
 test("turn starts update metadata without replacing progress content", async () => {
