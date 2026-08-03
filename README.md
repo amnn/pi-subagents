@@ -7,26 +7,25 @@ and renderer row.
 
 ## Development setup
 
-The repository requires Node, npm, and Pi. Tests run TypeScript directly with
-Node's type stripping; the current setup uses Node 23. Node may print an
-experimental type-stripping warning.
+Development requires Node.js 22.19 or newer, pnpm, and Pi. The repository's
+`devEngines` configuration pins the pnpm version and lets pnpm download it when
+necessary. Tests run TypeScript directly with Node's type stripping; Node may
+print an experimental type-stripping warning.
 
 Install the locked development dependencies:
 
 ```bash
-npm ci
+pnpm install
 ```
 
 The development dependencies include the same Pi packages imported by the
-extension, so standalone Node tests use normal package resolution. Pi 0.82.1's
-published shrinkwrap pins a vulnerable nested `brace-expansion`; `postinstall`
-deduplicates it to the direct 5.0.8 pin, and `npm run audit` verifies the
-resolved tree.
+extension, so standalone Node tests use normal package resolution. This project
+uses pnpm exclusively; installs from other package managers are rejected.
 
 ## Run the unit tests
 
 ```bash
-npm test
+pnpm test
 ```
 
 The suite uses temporary directories and fake child processes. It does not make
@@ -54,25 +53,25 @@ Test coverage is grouped as follows:
 ## Type-check
 
 ```bash
-npm run typecheck
+pnpm typecheck
 ```
 
 ## Check formatting
 
 ```bash
-npm run format:check
+pnpm format:check
 ```
 
 To apply formatting:
 
 ```bash
-npm run format
+pnpm format
 ```
 
 ## Smoke-test extension loading
 
 ```bash
-npm run smoke
+pnpm smoke
 ```
 
 The smoke test loads only this extension in offline mode and exits without a
@@ -81,7 +80,7 @@ model request.
 ## Full local validation
 
 ```bash
-npm run check && npm run smoke
+pnpm check && pnpm smoke
 ```
 
 ## Install as a local Pi package
@@ -92,7 +91,7 @@ install its development dependencies, and register its absolute path:
 
 ```bash
 cd /absolute/path/to/pi-subagents
-npm ci
+pnpm install
 pi install /absolute/path/to/pi-subagents
 ```
 

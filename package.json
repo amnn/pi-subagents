@@ -7,14 +7,20 @@
   "keywords": [
     "pi-package"
   ],
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.20.0",
+      "onFail": "download"
+    }
+  },
   "scripts": {
-    "postinstall": "node scripts/fix-brace-expansion.mjs",
     "test": "node --test test/discovery.test.ts test/output.test.ts test/subagent.test.ts",
     "typecheck": "tsc -p tsconfig.json",
     "format": "prettier --write . --ignore-unknown",
     "format:check": "prettier --check . --ignore-unknown",
-    "audit": "npm audit",
-    "check": "npm run format:check && npm run typecheck && npm test && npm run audit",
+    "audit": "pnpm audit",
+    "check": "pnpm run format:check && pnpm run typecheck && pnpm test && pnpm run audit",
     "smoke": "pi --offline --no-extensions -e . --list-models __subagent_package_smoke__"
   },
   "pi": {
@@ -33,7 +39,6 @@
     "@earendil-works/pi-coding-agent": "0.83.0",
     "@earendil-works/pi-tui": "0.83.0",
     "@types/node": "22.19.19",
-    "brace-expansion": "5.0.8",
     "prettier": "3.3.3",
     "typebox": "1.1.38",
     "typescript": "5.9.3"
