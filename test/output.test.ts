@@ -11,9 +11,9 @@ import {
   toolHeader,
   toolTitle,
   turnCount,
-} from "../output.ts";
+} from "../src/output.ts";
 
-import type { SubagentResult } from "../types.ts";
+import type { SubagentResult } from "../src/types.ts";
 
 function result(overrides: Partial<SubagentResult> = {}): SubagentResult {
   return {

@@ -10,11 +10,11 @@ import {
   collectSubagentProcess,
   createTempPrompt,
   runSubagent,
-} from "../subagent.ts";
+} from "../src/subagent.ts";
 
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
-import type { SubagentProgress } from "../types.ts";
+import type { SubagentProgress } from "../src/types.ts";
 
 class FakeProcess extends EventEmitter {
   stdout = new PassThrough();

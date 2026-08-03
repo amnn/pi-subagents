@@ -5,7 +5,7 @@ import * as path from "node:path";
 import test from "node:test";
 
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { discoverAgents } from "../discovery.ts";
+import { discoverAgents } from "../src/discovery.ts";
 
 async function writeAgent(
   dir: string,
