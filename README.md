@@ -9,8 +9,7 @@ and renderer row.
 
 Development requires Node.js 22.19 or newer, pnpm, and Pi. The repository's
 `devEngines` configuration pins the pnpm version and lets pnpm download it when
-necessary. Tests run TypeScript directly with Node's type stripping; Node may
-print an experimental type-stripping warning.
+necessary. Tests run TypeScript directly through `tsx`.
 
 Install the locked development dependencies:
 
@@ -35,13 +34,13 @@ on `PATH` to verify child arguments and prompt cleanup.
 Run one file:
 
 ```bash
-node --test test/subagent.test.ts
+pnpm exec tsx --test test/subagent.test.ts
 ```
 
 Run tests matching a name:
 
 ```bash
-node --test --test-name-pattern="parent abort" test/subagent.test.ts
+pnpm exec tsx --test --test-name-pattern="parent abort" test/subagent.test.ts
 ```
 
 Test coverage is grouped as follows:
@@ -80,8 +79,11 @@ model request.
 ## Full local validation
 
 ```bash
-pnpm check && pnpm smoke
+pnpm check
 ```
+
+The full check verifies formatting, type-checks the package, runs the tests,
+smoke-tests extension loading, and audits dependencies.
 
 ## Install as a local Pi package
 
