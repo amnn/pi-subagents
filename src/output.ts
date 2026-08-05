@@ -1,3 +1,6 @@
+// Copyright (c) Ashok Menon
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Formatting, size bounding, and private artifact storage for terminal
  * subagent results.

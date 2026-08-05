@@ -103,3 +103,7 @@ Confirm the installation with:
 ```bash
 pi list
 ```
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

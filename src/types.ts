@@ -1,3 +1,6 @@
+// Copyright (c) Ashok Menon
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Domain contracts shared by the subagent extension modules.
  *

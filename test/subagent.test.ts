@@ -1,3 +1,6 @@
+// Copyright (c) Ashok Menon
+// SPDX-License-Identifier: Apache-2.0
+
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";

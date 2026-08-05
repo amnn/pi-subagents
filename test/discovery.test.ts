@@ -1,3 +1,6 @@
+// Copyright (c) Ashok Menon
+// SPDX-License-Identifier: Apache-2.0
+
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
