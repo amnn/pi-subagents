@@ -7,19 +7,34 @@ and renderer row.
 
 ## Installation
 
-Install the published package from npm:
+Install the published package from npm (recommended):
 
 ```bash
 pi install npm:@am_n_n/pi-subagents
 ```
 
-Confirm the installation with `pi list`. Changes from package updates take effect
-after `/reload` or a Pi restart.
+Alternatively, install the latest source directly from GitHub:
+
+```bash
+pi install git:github.com/amnn/pi-subagents
+```
+
+To install from a local checkout:
+
+```bash
+git clone https://github.com/amnn/pi-subagents.git
+cd pi-subagents
+pnpm install
+pi install .
+```
+
+Confirm the installation with `pi list`. After installing an update or changing
+a local checkout, run `/reload` in Pi or restart it.
 
 ## Development setup
 
 Development requires Node.js 22.19 or newer, pnpm, and Pi. The repository's
-`devEngines` configuration pins the pnpm version and lets pnpm download it when
+`packageManager` field pins the pnpm version and lets pnpm download it when
 necessary. Tests run TypeScript directly through `tsx`.
 
 Install the locked development dependencies:
@@ -30,7 +45,7 @@ pnpm install
 
 The development dependencies include the same Pi packages imported by the
 extension, so standalone Node tests use normal package resolution. This project
-uses pnpm exclusively; installs from other package managers are rejected.
+uses pnpm for development; `pnpm-lock.yaml` is its only supported lockfile.
 
 ## Run the unit tests
 
@@ -95,27 +110,6 @@ pnpm check
 
 The full check verifies formatting, type-checks the package, runs the tests,
 smoke-tests extension loading, and audits dependencies.
-
-## Install from a checkout
-
-The package manifest declares `index.ts` as its extension entrypoint. Keep the
-repository outside Pi's auto-discovered `~/.pi/agent/extensions` directory,
-install its development dependencies, and register its absolute path:
-
-```bash
-cd /absolute/path/to/pi-subagents
-pnpm install
-pi install /absolute/path/to/pi-subagents
-```
-
-Pi records the local package in user settings and loads the extension directly
-from the checkout. Changes take effect after `/reload` or a Pi restart.
-
-Confirm the installation with:
-
-```bash
-pi list
-```
 
 ## License
 
