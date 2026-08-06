@@ -5,6 +5,17 @@ process. Independent work is expressed as sibling `subagent` tool calls; Pi owns
 concurrent scheduling while each call owns its child lifecycle, progress, result,
 and renderer row.
 
+## Installation
+
+Install the published package from npm:
+
+```bash
+pi install npm:@am_n_n/pi-subagents
+```
+
+Confirm the installation with `pi list`. Changes from package updates take effect
+after `/reload` or a Pi restart.
+
 ## Development setup
 
 Development requires Node.js 22.19 or newer, pnpm, and Pi. The repository's
@@ -85,7 +96,7 @@ pnpm check
 The full check verifies formatting, type-checks the package, runs the tests,
 smoke-tests extension loading, and audits dependencies.
 
-## Install as a local Pi package
+## Install from a checkout
 
 The package manifest declares `index.ts` as its extension entrypoint. Keep the
 repository outside Pi's auto-discovered `~/.pi/agent/extensions` directory,
