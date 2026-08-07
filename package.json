@@ -31,13 +31,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "11.20.0",
-      "onFail": "download"
-    }
-  },
+  "packageManager": "pnpm@11.20.0",
   "scripts": {
     "test": "tsx --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
