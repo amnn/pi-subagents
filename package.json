@@ -1,6 +1,6 @@
 {
   "name": "@am_n_n/pi-subagents",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Isolated single-task subagents for Pi",
   "repository": {
     "type": "git",
