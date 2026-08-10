@@ -137,10 +137,10 @@ export interface SubagentResult extends SubagentTask {
 
   /**
    * Latest validated terminal assistant stop reason observed in the JSON protocol.
-   * `length`, `error`, and `aborted` affect terminal classification, while a
-   * terminal `toolUse` indicates that the purported final response was not done.
+   * `length`, `error`, `aborted`, and `deferred` prevent successful completion,
+   * while terminal `toolUse` means the purported final response was not done.
    */
-  stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
+  stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
 
   /** Error text supplied directly by an assistant protocol message, if any. */
   errorMessage?: string;
