@@ -4,6 +4,8 @@ updates:
     directory: /
     schedule:
       interval: daily
+    reviewers:
+      - amnn
     allow:
       - dependency-name: "@earendil-works/pi-*"
     groups:
