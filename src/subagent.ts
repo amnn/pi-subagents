@@ -75,6 +75,7 @@ const TERMINAL_STOP_REASONS = new Set([
   "toolUse",
   "error",
   "aborted",
+  "deferred",
 ]);
 
 /** Runtime controls for one child-process collection lifecycle. */
@@ -308,14 +309,19 @@ export function collectSubagentProcess(
       return;
     }
 
-    if (event.type === "message_start" || event.type === "message_update") {
+    if (event.type === "message_start") {
       if (!isAgentMessage(event.message, true)) {
         protocolError(
-          `${event.type} omitted its message on stdout line ${state.stdoutLine}`,
+          `message_start omitted its message on stdout line ${state.stdoutLine}`,
         );
         return;
       }
       recordAssistant(event.message);
+      return;
+    }
+
+    if (event.type === "message_update") {
+      // The terminal message is authoritative; streaming deltas are optional UI data.
       return;
     }
 

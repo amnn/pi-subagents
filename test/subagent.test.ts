@@ -66,7 +66,8 @@ function assistant(
     | "length"
     | "toolUse"
     | "error"
-    | "aborted" = "stop",
+    | "aborted"
+    | "deferred" = "stop",
   errorMessage?: string,
 ): Record<string, unknown> {
   return { role: "assistant", content, stopReason, errorMessage };
@@ -134,7 +135,7 @@ test("successful result uses only final assistant text", async () => {
   assert(progress.includes("using read"));
 });
 
-test("pending stop reasons are accepted while messages stream", async () => {
+test("message updates are ignored until authoritative message end", async () => {
   const proc = new FakeProcess();
   const progress: string[] = [];
   const pending = collectSubagentProcess(child(proc), task, {
@@ -147,7 +148,15 @@ test("pending stop reasons are accepted while messages stream", async () => {
   });
   proc.send({
     type: "message_update",
-    message: assistant([{ type: "text", text: "draft" }], "pending"),
+    message: assistant([{ type: "text", text: "legacy draft" }], "pending"),
+  });
+  proc.send({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "delta draft",
+    },
   });
   finalEvents(proc, assistant([{ type: "text", text: "report" }]));
   proc.close(0);
@@ -157,7 +166,9 @@ test("pending stop reasons are accepted while messages stream", async () => {
   assert.equal(result.output, "report");
   assert.equal(result.stopReason, "stop");
   assert.deepEqual(result.diagnostics, []);
-  assert(progress.includes("draft"));
+  assert.equal(progress.includes("legacy draft"), false);
+  assert.equal(progress.includes("delta draft"), false);
+  assert(progress.includes("report"));
 });
 
 test("pending stop reasons remain invalid on terminal messages", async () => {
@@ -255,6 +266,24 @@ test("model error, aborted, and length stop reasons are not successful", async (
       assert.equal(result.stopReason, stopReason);
     });
   }
+});
+
+test("deferred responses are valid protocol but not completed reports", async () => {
+  const proc = new FakeProcess();
+  const pending = collectSubagentProcess(child(proc), task);
+  finalEvents(
+    proc,
+    assistant([{ type: "text", text: "queued report" }], "deferred"),
+  );
+  proc.close(0);
+
+  const result = await pending;
+  assert.equal(result.status, "failed");
+  assert.equal(result.output, "queued report");
+  assert.equal(result.stopReason, "deferred");
+  assert(
+    result.diagnostics.includes("Final assistant stop reason was deferred"),
+  );
 });
 
 test("malformed and unknown events fail an otherwise successful process", async () => {
