@@ -39,6 +39,9 @@
     "format:check": "prettier --check . --ignore-unknown",
     "smoke": "pi --offline --no-extensions -e . --list-models __pi_package_smoke__",
     "check": "pnpm run format:check && pnpm run typecheck && pnpm test && pnpm run smoke && pnpm audit",
+    "bump:patch": "pnpm version patch --no-git-tag-version",
+    "bump:minor": "pnpm version minor --no-git-tag-version",
+    "bump:major": "pnpm version major --no-git-tag-version",
     "prepublishOnly": "pnpm check"
   },
   "pi": {
