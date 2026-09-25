@@ -135,6 +135,40 @@ test("successful result uses only final assistant text", async () => {
   assert(progress.includes("using read"));
 });
 
+test("system messages in Pi 0.87 lifecycle events are accepted", async () => {
+  const proc = new FakeProcess();
+  const progress: string[] = [];
+  const pending = collectSubagentProcess(child(proc), task, {
+    onProgress: (update) => progress.push(update.update),
+  });
+  const system = {
+    role: "system",
+    content: "private system instructions",
+    timestamp: 0,
+  };
+  const final = assistant([{ type: "text", text: "final report" }]);
+
+  proc.send({ type: "agent_start" });
+  proc.send({ type: "turn_start" });
+  proc.send({ type: "message_start", message: system });
+  proc.send({ type: "message_end", message: system });
+  proc.send({ type: "message_end", message: final });
+  proc.send({
+    type: "agent_end",
+    messages: [system, final],
+    willRetry: false,
+  });
+  proc.send({ type: "agent_settled" });
+  proc.close(0);
+
+  const result = await pending;
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.status, "completed");
+  assert.equal(result.output, "final report");
+  assert.equal(result.stopReason, "stop");
+  assert(progress.every((update) => !update.includes(system.content)));
+});
+
 test("message updates are ignored until authoritative message end", async () => {
   const proc = new FakeProcess();
   const progress: string[] = [];

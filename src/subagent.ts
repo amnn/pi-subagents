@@ -59,6 +59,8 @@ const KNOWN_EVENTS = new Set([
 
 /** Allowlist of message roles in Pi protocol events. */
 const AGENT_MESSAGE_ROLES = new Set([
+  // Pi 0.87 carries system prompt and tool declarations in the transcript.
+  "system",
   "user",
   "assistant",
   "toolResult",
